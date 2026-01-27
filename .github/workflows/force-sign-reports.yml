@@ -1,0 +1,61 @@
+name: Force sign reports
+on:
+  workflow_dispatch:
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    name: Force sign PDFs
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Create signatures and commit
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          years=(2021 2022 2023 2024 2025)
+          pdfs=()
+          for year in "${years[@]}"; do
+            pdfs+=("${year}"/*.pdf)
+          done
+
+          if (( ${#pdfs[@]} == 0 )); then
+            echo "No PDFs found in target folders."
+            exit 0
+          fi
+
+          echo "Importing signing key..."
+          printf '%s' "$GPG_PRIVATE_KEY" | base64 --decode | gpg --import --batch
+
+          for pdf in "${pdfs[@]}"; do
+            sig="${pdf}.sig"
+            echo "Creating signature for $pdf"
+            gpg --detach-sign --sign --yes --batch --pinentry-mode loopback \
+              --passphrase "$GPG_PASSPHRASE" --output "$sig" "$pdf"
+            gpg --verify "$sig" "$pdf"
+          done
+
+          git config --local user.email "auditors@ackeeblockchain.com"
+          git config --local user.name "Mr. Builder [bot]"
+
+          add_files=()
+          for pdf in "${pdfs[@]}"; do
+            add_files+=("$pdf" "$pdf.sig")
+          done
+          git add "${add_files[@]}"
+
+          if git diff --cached --quiet; then
+            echo "No new signatures to commit."
+            exit 0
+          fi
+
+          git commit -m "🤖 Sign report PDFs"
+          git push
